@@ -1,0 +1,18 @@
+@import "tailwindcss";
+
+@media print {
+  body {
+    background: #ffffff !important;
+    color: #000000 !important;
+  }
+  .no-print {
+    display: none !important;
+  }
+  .print-only-pass {
+    box-shadow: none !important;
+    border: 2px solid #000000 !important;
+    margin: 0 auto !important;
+    width: 100% !important;
+    max-width: 380px !important;
+  }
+}

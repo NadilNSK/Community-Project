@@ -1,0 +1,189 @@
+// PostgreSQL 15 Production Prisma Schema
+// Smart Inter-Branch Garment Tracking & Gate Pass System (IS5109 Group 14)
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+enum BranchType {
+  SEWING
+  WASHING
+  FINISHING
+  EMBROIDERY
+  SUBCONTRACTOR
+  HEAD_OFFICE
+}
+
+enum UserRole {
+  SYSTEM_ADMIN
+  DISPATCH_OFFICER
+  GATE_SECURITY
+  RECEIVING_OFFICER
+  LOGISTICS_MANAGER
+}
+
+enum TransitStatus {
+  CREATED
+  IN_TRANSIT
+  RECEIVED
+  DISCREPANCY
+  RESOLVED
+}
+
+enum ResolutionStatus {
+  OPEN
+  INVESTIGATING
+  RESOLVED
+}
+
+enum ScanType {
+  DEPARTURE_OUT
+  DESTINATION_IN
+  INTAKE_VERIFICATION
+}
+
+model Branch {
+  id              String     @id @default(uuid()) @map("branch_id")
+  branchCode      String     @unique @map("branch_code")
+  branchName      String     @map("branch_name")
+  branchType      BranchType @map("branch_type")
+  locationAddress String     @map("location_address")
+  isActive        Boolean    @default(true) @map("is_active")
+  createdAt       DateTime   @default(now()) @map("created_at")
+  updatedAt       DateTime   @updatedAt @map("updated_at")
+
+  users               User[]                @relation("BranchUsers")
+  dispatchedTransfers TransferConsignment[] @relation("SourceBranch")
+  receivedTransfers   TransferConsignment[] @relation("DestinationBranch")
+
+  @@map("branches")
+}
+
+model User {
+  id               String   @id @default(uuid()) @map("user_id")
+  username         String   @unique
+  email            String   @unique
+  fullName         String   @map("full_name")
+  passwordHash     String   @map("password_hash")
+  role             UserRole
+  assignedBranchId String   @map("assigned_branch_id")
+  isActive         Boolean  @default(true) @map("is_active")
+  createdAt        DateTime @default(now()) @map("created_at")
+  updatedAt        DateTime @updatedAt @map("updated_at")
+
+  assignedBranch        Branch                @relation("BranchUsers", fields: [assignedBranchId], references: [id])
+  dispatchedTransfers   TransferConsignment[] @relation("DispatchedByUser")
+  gateOutTransfers      TransferConsignment[] @relation("GateOutByUser")
+  receivedTransfers     TransferConsignment[] @relation("ReceivedByUser")
+  reportedDiscrepancies DiscrepancyLog[]      @relation("ReportedByUser")
+  resolvedDiscrepancies DiscrepancyLog[]      @relation("ResolvedByUser")
+  scanLogs              ScanAuditLog[]
+
+  @@index([assignedBranchId])
+  @@index([role])
+  @@map("users")
+}
+
+model Vehicle {
+  id             String   @id @default(uuid()) @map("vehicle_id")
+  registrationNo String   @unique @map("registration_no")
+  driverName     String   @map("driver_name")
+  driverNic      String   @map("driver_nic")
+  driverPhone    String   @map("driver_phone")
+  vehicleType    String   @default("Lorry") @map("vehicle_type")
+  isActive       Boolean  @default(true) @map("is_active")
+  createdAt      DateTime @default(now()) @map("created_at")
+  updatedAt      DateTime @updatedAt @map("updated_at")
+
+  transfers TransferConsignment[]
+
+  @@map("vehicles")
+}
+
+model TransferConsignment {
+  id                     String        @id @default(uuid()) @map("transfer_id")
+  transferCode           String        @unique @map("transfer_code")
+  qrPassHash             String        @unique @map("qr_pass_hash")
+  garmentStyle           String        @map("garment_style")
+  garmentColor           String        @map("garment_color")
+  sizeBreakdown          Json          @map("size_breakdown")
+  dispatchedQty          Int           @map("dispatched_qty")
+  receivedQty            Int?          @map("received_qty")
+  status                 TransitStatus @default(CREATED) @map("current_status")
+  expectedTransitMinutes Int           @default(180) @map("expected_transit_minutes")
+  dispatchTimestamp      DateTime?     @map("dispatch_timestamp")
+  gateInTimestamp        DateTime?     @map("gate_in_timestamp")
+  receivedTimestamp      DateTime?     @map("received_timestamp")
+  notes                  String?
+  createdAt              DateTime      @default(now()) @map("created_at")
+  updatedAt              DateTime      @updatedAt @map("updated_at")
+
+  sourceBranchId         String        @map("source_branch_id")
+  destinationBranchId    String        @map("destination_branch_id")
+  vehicleId              String        @map("vehicle_id")
+  dispatchedById         String        @map("dispatched_by_id")
+  gateOutById            String?       @map("gate_out_by_id")
+  receivedById           String?       @map("received_by_id")
+
+  sourceBranch           Branch          @relation("SourceBranch", fields: [sourceBranchId], references: [id])
+  destinationBranch      Branch          @relation("DestinationBranch", fields: [destinationBranchId], references: [id])
+  vehicle                Vehicle         @relation(fields: [vehicleId], references: [id])
+  dispatchedBy           User            @relation("DispatchedByUser", fields: [dispatchedById], references: [id])
+  gateOutBy              User?           @relation("GateOutByUser", fields: [gateOutById], references: [id])
+  receivedBy             User?           @relation("ReceivedByUser", fields: [receivedById], references: [id])
+  discrepancy            DiscrepancyLog?
+  scanLogs               ScanAuditLog[]
+
+  @@index([status])
+  @@index([sourceBranchId])
+  @@index([destinationBranchId])
+  @@index([vehicleId])
+  @@index([dispatchTimestamp])
+  @@map("transfer_consignments")
+}
+
+model DiscrepancyLog {
+  id               String           @id @default(uuid()) @map("discrepancy_id")
+  transferId       String           @unique @map("transfer_id")
+  shortageCount    Int              @map("shortage_count")
+  resolutionStatus ResolutionStatus @default(OPEN) @map("resolution_status")
+  isResolved       Boolean          @default(false) @map("is_resolved")
+  comments         String?
+  alertSent        Boolean          @default(false) @map("alert_sent")
+  timestamp        DateTime         @default(now()) @map("timestamp")
+  resolvedAt       DateTime?        @map("resolved_at")
+
+  reportedById     String           @map("reported_by_id")
+  resolvedById     String?          @map("resolved_by_id")
+
+  transfer         TransferConsignment @relation(fields: [transferId], references: [id], onDelete: Cascade)
+  reportedBy       User                @relation("ReportedByUser", fields: [reportedById], references: [id])
+  resolvedBy       User?               @relation("ResolvedByUser", fields: [resolvedById], references: [id])
+
+  @@index([resolutionStatus])
+  @@index([isResolved])
+  @@map("discrepancy_logs")
+}
+
+model ScanAuditLog {
+  id              String              @id @default(uuid()) @map("scan_id")
+  clientScanId    String              @unique @map("client_scan_id")
+  transferId      String              @map("transfer_id")
+  scanType        ScanType            @map("scan_type")
+  scannedById     String              @map("scanned_by_id")
+  recordedQty     Int?                @map("recorded_qty")
+  wasOfflineQueue Boolean             @default(false) @map("was_offline_queue")
+  scannedAt       DateTime            @map("scanned_at")
+  syncedAt        DateTime            @default(now()) @map("synced_at")
+
+  transfer        TransferConsignment @relation(fields: [transferId], references: [id], onDelete: Cascade)
+  scannedBy       User                @relation(fields: [scannedById], references: [id])
+
+  @@index([transferId])
+  @@map("scan_audit_logs")
+}

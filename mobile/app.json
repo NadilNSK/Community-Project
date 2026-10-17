@@ -1,0 +1,35 @@
+{
+  "expo": {
+    "name": "Trendy Smart Gate Pass",
+    "slug": "trendy-smart-gate-pass",
+    "version": "1.0.0",
+    "orientation": "portrait",
+    "userInterfaceStyle": "dark",
+    "newArchEnabled": true,
+    "splash": {
+      "backgroundColor": "#0f172a"
+    },
+    "ios": {
+      "supportsTablet": true,
+      "bundleIdentifier": "lk.ac.sab.cis.group14.trendygatepass",
+      "infoPlist": {
+        "NSCameraUsageDescription": "Allow Trendy Gate Pass to access your camera to scan Master Transfer QR Codes at factory gates."
+      }
+    },
+    "android": {
+      "package": "lk.ac.sab.cis.group14.trendygatepass",
+      "permissions": [
+        "android.permission.CAMERA",
+        "android.permission.VIBRATE"
+      ]
+    },
+    "plugins": [
+      [
+        "expo-camera",
+        {
+          "cameraPermission": "Allow Trendy Gate Pass to use the rear camera for scanning Master Transfer QR Gate Passes."
+        }
+      ]
+    ]
+  }
+}

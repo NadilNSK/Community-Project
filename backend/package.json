@@ -1,0 +1,25 @@
+{
+  "name": "smart-garment-tracking-backend",
+  "version": "1.0.0",
+  "description": "Smart Inter-Branch Garment Tracking & Gate Pass System - Backend API (IS5109 Group 14)",
+  "main": "src/server.js",
+  "scripts": {
+    "start": "node src/server.js",
+    "dev": "node --watch src/server.js",
+    "db:push": "prisma db push",
+    "db:seed": "node prisma/seed.js",
+    "db:postgres": "prisma db push --schema=prisma/schema.postgresql.prisma"
+  },
+  "dependencies": {
+    "@prisma/client": "^6.4.1",
+    "bcryptjs": "^2.4.3",
+    "cors": "^2.8.5",
+    "dotenv": "^16.4.5",
+    "express": "^4.21.1",
+    "jsonwebtoken": "^9.0.2",
+    "qrcode": "^1.5.4"
+  },
+  "devDependencies": {
+    "prisma": "^6.4.1"
+  }
+}
