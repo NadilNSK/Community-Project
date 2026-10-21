@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useMemo, useEffect } from 'react';
 import {
   View,
   Text,
@@ -30,10 +30,65 @@ export default function DispatchScreen({
   const [destinationBranchId, setDestinationBranchId] = useState(
     branches.find((b) => b.branchType === 'WASHING')?.id || branches[1]?.id || ''
   );
-  const [vehicleId, setVehicleId] = useState(vehicles[0]?.id || '');
   const [expectedTransitMinutes, setExpectedTransitMinutes] = useState('120');
   const [notes, setNotes] = useState('');
   const [submitting, setSubmitting] = useState(false);
+
+  const [showInbound, setShowInbound] = useState(true);
+  const [yardData, setYardData] = useState({ inYard: [], inbound: [] });
+
+  useEffect(() => {
+    let isMounted = true;
+    const fetchYard = async () => {
+      const branchId = sourceBranchId || branches[0]?.id;
+      if (!branchId) return;
+      try {
+        const res = await apiRequest(`/api/vehicles/available?branchId=${branchId}`);
+        if (isMounted && res && Array.isArray(res.inYard)) {
+          setYardData(res);
+        }
+      } catch (err) {
+        // Fallback
+        const activeTransfers = (transfers || []).filter(
+          (t) => t.status !== 'RECEIVED' && t.status !== 'RESOLVED'
+        );
+        const inYardFallback = (vehicles || [])
+          .filter(
+            (v) =>
+              (v.currentBranchId === branchId || (!v.currentBranchId && branches[0]?.id === branchId)) &&
+              !activeTransfers.some((t) => t.vehicleId === v.id)
+          )
+          .map((v) => ({ ...v, registrationNumber: v.registrationNo, stateDescription: 'Idle / Ready to load' }));
+        if (isMounted) {
+          setYardData({
+            inYard: inYardFallback,
+            inbound: [],
+          });
+        }
+      }
+    };
+    fetchYard();
+    return () => {
+      isMounted = false;
+    };
+  }, [sourceBranchId, transfers, vehicles]);
+
+  const inYardVehicles = yardData.inYard;
+  const inboundVehicles = yardData.inbound;
+  const [vehicleId, setVehicleId] = useState(inYardVehicles[0]?.id || '');
+
+  // Update selected vehicle if current selection becomes unavailable
+  useEffect(() => {
+    if (inYardVehicles.length > 0 && !inYardVehicles.some((v) => v.id === vehicleId)) {
+      setVehicleId(inYardVehicles[0]?.id || '');
+    } else if (inYardVehicles.length === 0) {
+      setVehicleId('');
+    }
+  }, [inYardVehicles, vehicleId]);
+
+  const noVehiclesAvailable = inYardVehicles.length === 0;
+  const currentBranchName =
+    branches.find((b) => b.id === sourceBranchId)?.branchName || user?.branchName || 'Adhikarigama Sewing Plant';
 
   const totalPieces =
     (Number(sizes.S) || 0) +
@@ -58,9 +113,17 @@ export default function DispatchScreen({
       return;
     }
 
+    // Prevent submission if no vehicle is selected or available
+    if (!vehicleId || noVehiclesAvailable) {
+      Alert.alert(
+        'No Fleet Available',
+        'No available fleet vehicles. All assigned vehicles are currently in transit.'
+      );
+      return;
+    }
+
     const srcId = sourceBranchId || branches[0]?.id;
     const dstId = destinationBranchId || branches[1]?.id;
-    const vehId = vehicleId || vehicles[0]?.id;
 
     if (srcId === dstId) {
       Alert.alert('Invalid Route', 'Source and destination facilities must be different.');
@@ -78,7 +141,7 @@ export default function DispatchScreen({
           dispatchedQty: totalPieces,
           sourceBranchId: srcId,
           destinationBranchId: dstId,
-          vehicleId: vehId,
+          vehicleId,
           expectedTransitMinutes: Number(expectedTransitMinutes) || 120,
           notes,
         }),
@@ -88,6 +151,9 @@ export default function DispatchScreen({
       setGarmentColor('');
       setSizes({ S: 0, M: 0, L: 0, XL: 0 });
       setNotes('');
+      // After successful dispatch, select next available vehicle
+      const remaining = availableVehicles.filter((v) => v.id !== vehicleId);
+      setVehicleId(remaining[0]?.id || '');
       onCreatedPass(created);
     } catch (err) {
       Alert.alert('Dispatch Error', err.message);
@@ -239,38 +305,105 @@ export default function DispatchScreen({
           })}
         </View>
 
-        <Text style={[styles.fieldLabel, { marginTop: 14 }]}>ASSIGNED VEHICLE</Text>
-        <View style={styles.vehicleList}>
-          {vehicles.map((v) => {
-            const active = (vehicleId || vehicles[0]?.id) === v.id;
-            return (
-              <TouchableOpacity
-                key={v.id}
-                style={[styles.vehicleCard, active && styles.vehicleCardActive]}
-                onPress={() => setVehicleId(v.id)}
-              >
-                <View style={[styles.vehicleIconBox, active && { backgroundColor: '#4f46e5' }]}>
-                  <Ionicons
-                    name="bus"
-                    size={16}
-                    color={active ? '#ffffff' : '#818cf8'}
-                  />
-                </View>
-                <View style={{ flex: 1 }}>
-                  <Text style={styles.vehicleReg}>{v.registrationNo}</Text>
-                  <Text style={styles.vehicleDriver}>
-                    {v.driverName} • {v.driverPhone}
-                  </Text>
-                </View>
-                <Ionicons
-                  name={active ? 'radio-button-on' : 'radio-button-off'}
-                  size={20}
-                  color={active ? '#818cf8' : '#334155'}
-                />
-              </TouchableOpacity>
-            );
-          })}
+        <View style={styles.yardHeaderRow}>
+          <Text style={styles.fieldLabel}>
+            VEHICLES CURRENTLY IN YARD ({currentBranchName.toUpperCase()}):{' '}
+            <Text style={{ color: '#34d399', fontWeight: '900' }}>
+              {inYardVehicles.length} READY
+            </Text>
+          </Text>
         </View>
+
+        {noVehiclesAvailable ? (
+          <View style={styles.noFleetBanner}>
+            <Ionicons name="warning" size={18} color="#f59e0b" />
+            <Text style={styles.noFleetText}>
+              No fleet vehicles currently parked in this yard. All vehicles are on transit.
+            </Text>
+          </View>
+        ) : (
+          <View style={styles.vehicleList}>
+            {inYardVehicles.map((v) => {
+              const active = (vehicleId || inYardVehicles[0]?.id) === v.id;
+              return (
+                <TouchableOpacity
+                  key={v.id}
+                  style={[styles.vehicleCard, active && styles.vehicleCardActive]}
+                  onPress={() => setVehicleId(v.id)}
+                >
+                  <View style={[styles.vehicleIconBox, active && { backgroundColor: '#10b981' }]}>
+                    <Ionicons
+                      name="bus"
+                      size={16}
+                      color={active ? '#ffffff' : '#34d399'}
+                    />
+                  </View>
+                  <View style={{ flex: 1 }}>
+                    <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginBottom: 2 }}>
+                      <Text style={styles.vehicleReg}>{v.registrationNo || v.registrationNumber}</Text>
+                      <View style={styles.inYardBadge}>
+                        <Text style={styles.inYardBadgeText}>In Yard • Ready to Load</Text>
+                      </View>
+                    </View>
+                    <Text style={styles.vehicleDriver}>
+                      {v.driverName} • {v.driverPhone}
+                    </Text>
+                    <Text style={styles.vehicleStateText}>
+                      Idle / Ready to load
+                    </Text>
+                  </View>
+                  <Ionicons
+                    name={active ? 'radio-button-on' : 'radio-button-off'}
+                    size={20}
+                    color={active ? '#34d399' : '#334155'}
+                  />
+                </TouchableOpacity>
+              );
+            })}
+          </View>
+        )}
+
+        {inboundVehicles.length > 0 && (
+          <View style={{ marginBottom: 14 }}>
+            <TouchableOpacity
+              style={styles.inboundToggleBtn}
+              onPress={() => setShowInbound(!showInbound)}
+            >
+              <Ionicons
+                name={showInbound ? 'chevron-up' : 'chevron-down'}
+                size={14}
+                color="#94a3b8"
+              />
+              <Text style={styles.inboundToggleText}>
+                Inbound to Yard ({inboundVehicles.length})
+              </Text>
+            </TouchableOpacity>
+
+            {showInbound && (
+              <View style={styles.inboundList}>
+                {inboundVehicles.map((v) => (
+                  <View key={v.id} style={styles.inboundCard}>
+                    <View style={{ flex: 1 }}>
+                      <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginBottom: 4 }}>
+                        <Text style={styles.inboundReg}>
+                          {v.registrationNo || v.registrationNumber} ({v.driverName})
+                        </Text>
+                        <View style={styles.inboundBadge}>
+                          <Text style={styles.inboundBadgeText}>
+                            In Transit • En Route from {v.originPlant || 'Kuruwita'}
+                          </Text>
+                        </View>
+                      </View>
+                      <Text style={styles.inboundEta}>
+                        SLA / ETA: {v.activeConsignment?.etaFormatted || 'Expected arrival in ~25 mins'}
+                      </Text>
+                    </View>
+                  </View>
+                ))}
+              </View>
+            )}
+          </View>
+        )}
 
         <View style={styles.bottomInputsRow}>
           <View style={{ flex: 1 }}>
@@ -298,9 +431,18 @@ export default function DispatchScreen({
           </View>
         </View>
 
-        <TouchableOpacity style={styles.issueBtn} disabled={submitting} onPress={handleSubmit}>
+        <TouchableOpacity
+          style={[styles.issueBtn, noVehiclesAvailable && styles.issueBtnDisabled]}
+          disabled={submitting || noVehiclesAvailable}
+          onPress={handleSubmit}
+        >
           {submitting ? (
             <ActivityIndicator color="#ffffff" />
+          ) : noVehiclesAvailable ? (
+            <>
+              <Ionicons name="warning" size={18} color="#ffffff" />
+              <Text style={styles.issueBtnText}>No Fleet Vehicles Available</Text>
+            </>
           ) : (
             <>
               <Ionicons name="qr-code" size={18} color="#ffffff" />
@@ -561,6 +703,76 @@ const styles = StyleSheet.create({
     fontSize: 11,
     marginTop: 1,
   },
+  vehicleStateText: {
+    color: '#94a3b8',
+    fontSize: 10,
+    fontWeight: '600',
+    marginTop: 2,
+  },
+  yardHeaderRow: {
+    marginTop: 14,
+    marginBottom: 4,
+  },
+  inYardBadge: {
+    backgroundColor: 'rgba(16, 185, 129, 0.14)',
+    borderColor: 'rgba(16, 185, 129, 0.35)',
+    borderWidth: 1,
+    borderRadius: 8,
+    paddingHorizontal: 7,
+    paddingVertical: 2,
+  },
+  inYardBadgeText: {
+    color: '#34d399',
+    fontSize: 9,
+    fontWeight: '800',
+  },
+  inboundToggleBtn: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+    paddingVertical: 4,
+  },
+  inboundToggleText: {
+    color: '#94a3b8',
+    fontSize: 11,
+    fontWeight: '700',
+  },
+  inboundList: {
+    gap: 8,
+    marginTop: 6,
+  },
+  inboundCard: {
+    backgroundColor: 'rgba(13, 19, 34, 0.6)',
+    borderColor: '#1E293B',
+    borderWidth: 1,
+    borderRadius: 14,
+    padding: 12,
+    opacity: 0.6,
+  },
+  inboundReg: {
+    color: '#cbd5e1',
+    fontSize: 12,
+    fontWeight: '700',
+  },
+  inboundBadge: {
+    backgroundColor: 'rgba(14, 165, 233, 0.15)',
+    borderColor: 'rgba(14, 165, 233, 0.35)',
+    borderWidth: 1,
+    borderRadius: 8,
+    paddingHorizontal: 7,
+    paddingVertical: 2,
+  },
+  inboundBadgeText: {
+    color: '#38bdf8',
+    fontSize: 9,
+    fontWeight: '800',
+  },
+  inboundEta: {
+    color: '#fbbf24',
+    fontSize: 10,
+    fontWeight: '700',
+    marginTop: 2,
+  },
   bottomInputsRow: {
     flexDirection: 'row',
     gap: 10,
@@ -575,10 +787,32 @@ const styles = StyleSheet.create({
     gap: 8,
     marginTop: 4,
   },
+  issueBtnDisabled: {
+    backgroundColor: '#334155',
+    opacity: 0.7,
+  },
   issueBtnText: {
     color: '#ffffff',
     fontSize: 15,
     fontWeight: '800',
+  },
+  noFleetBanner: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 10,
+    backgroundColor: 'rgba(245, 158, 11, 0.12)',
+    borderColor: 'rgba(245, 158, 11, 0.35)',
+    borderWidth: 1,
+    borderRadius: 14,
+    padding: 14,
+    marginBottom: 14,
+  },
+  noFleetText: {
+    flex: 1,
+    color: '#fbbf24',
+    fontSize: 12,
+    fontWeight: '700',
+    lineHeight: 17,
   },
   historyTitle: {
     color: '#ffffff',

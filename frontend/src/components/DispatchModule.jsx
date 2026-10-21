@@ -1,5 +1,18 @@
-import React, { useState } from 'react';
-import { QrCode, Printer, PlusCircle, ShieldCheck, Truck, PackageCheck, Copy, Check } from 'lucide-react';
+import React, { useState, useMemo, useEffect } from 'react';
+import {
+  QrCode,
+  Printer,
+  PlusCircle,
+  ShieldCheck,
+  Truck,
+  PackageCheck,
+  Copy,
+  Check,
+  AlertTriangle,
+  ChevronDown,
+  ChevronUp,
+  Clock,
+} from 'lucide-react';
 import { apiRequest } from '../api/client';
 
 export default function DispatchModule({
@@ -21,12 +34,109 @@ export default function DispatchModule({
   const [destinationBranchId, setDestinationBranchId] = useState(
     branches.find((b) => b.branchType === 'WASHING')?.id || branches[1]?.id || ''
   );
-  const [vehicleId, setVehicleId] = useState(vehicles[0]?.id || '');
   const [expectedTransitMinutes, setExpectedTransitMinutes] = useState(120);
   const [notes, setNotes] = useState('Consolidated bundle transfer — sealed container lorry');
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState('');
   const [copiedPayload, setCopiedPayload] = useState(false);
+  const [showInbound, setShowInbound] = useState(true);
+
+  // Dynamic location-scoped yard fleet state
+  const [yardData, setYardData] = useState({ inYard: [], inbound: [] });
+  const [loadingYard, setLoadingYard] = useState(false);
+
+  // Fetch vehicles physically inside this officer's facility and idle
+  useEffect(() => {
+    let isMounted = true;
+    const fetchYardVehicles = async () => {
+      if (!sourceBranchId) return;
+      setLoadingYard(true);
+      try {
+        const res = await apiRequest(`/api/vehicles/available?branchId=${sourceBranchId}`);
+        if (isMounted && res && Array.isArray(res.inYard)) {
+          setYardData({
+            inYard: res.inYard,
+            inbound: res.inbound || [],
+          });
+        }
+      } catch (err) {
+        // Fallback to client-side filtering if offline or API error
+        if (isMounted) {
+          const activeTransfers = (transfers || []).filter(
+            (t) => t.status !== 'RECEIVED' && t.status !== 'RESOLVED'
+          );
+          const filteredInYard = (vehicles || [])
+            .filter((v) => {
+              const matchesBranch = (v.currentBranchId || v.currentBranch?.id) === sourceBranchId;
+              const isNotActive = !activeTransfers.some(
+                (t) => t.vehicleId === v.id || t.vehicle?.id === v.id
+              );
+              return matchesBranch && isNotActive && v.status !== 'IN_TRANSIT' && v.status !== 'MAINTENANCE';
+            })
+            .map((v) => ({
+              ...v,
+              registrationNumber: v.registrationNo,
+              checkedInTime: '08:30 AM',
+              stateDescription: 'Idle / Ready to load',
+            }));
+
+          const inTransitVehicles = (vehicles || [])
+            .filter((v) => {
+              const active = activeTransfers.find(
+                (t) => (t.vehicleId === v.id || t.vehicle?.id === v.id) && t.destinationBranchId === sourceBranchId
+              );
+              return Boolean(active);
+            })
+            .map((v) => {
+              const t = activeTransfers.find(
+                (tx) => (tx.vehicleId === v.id || tx.vehicle?.id === v.id) && tx.destinationBranchId === sourceBranchId
+              );
+              return {
+                ...v,
+                registrationNumber: v.registrationNo,
+                originPlant: t?.sourceBranch?.branchName || 'Origin Facility',
+                activeConsignment: {
+                  transferCode: t?.transferCode,
+                  etaMinutes: 25,
+                  etaFormatted: `Expected arrival in ~25 mins (${t?.transferCode})`,
+                },
+              };
+            });
+
+          setYardData({
+            inYard: filteredInYard,
+            inbound: inTransitVehicles,
+          });
+        }
+      } finally {
+        if (isMounted) setLoadingYard(false);
+      }
+    };
+
+    fetchYardVehicles();
+    return () => {
+      isMounted = false;
+    };
+  }, [sourceBranchId, transfers, vehicles]);
+
+  const inYardVehicles = yardData.inYard;
+  const inboundVehicles = yardData.inbound;
+  const [vehicleId, setVehicleId] = useState(inYardVehicles[0]?.id || '');
+
+  // Keep vehicleId synced with in-yard vehicles
+  useEffect(() => {
+    if (inYardVehicles.length > 0 && !inYardVehicles.some((v) => v.id === vehicleId)) {
+      setVehicleId(inYardVehicles[0]?.id || '');
+    } else if (inYardVehicles.length === 0) {
+      setVehicleId('');
+    }
+  }, [inYardVehicles, vehicleId]);
+
+  const noVehiclesAvailable = inYardVehicles.length === 0;
+
+  const currentOriginBranch =
+    branches.find((b) => b.id === sourceBranchId) || user?.assignedBranch || branches[0];
+  const originBranchName = currentOriginBranch?.branchName || 'Adhikarigama Sewing Plant';
 
   const totalPieces =
     (Number(sizes.S) || 0) +
@@ -44,6 +154,13 @@ export default function DispatchModule({
   const handleCreateDispatch = async (e) => {
     e.preventDefault();
     setError('');
+
+    // Prevent submission if no vehicle is selected or available
+    if (!vehicleId || noVehiclesAvailable) {
+      setError('No available fleet vehicles. All assigned vehicles are currently in transit.');
+      return;
+    }
+
     setSubmitting(true);
     try {
       const created = await apiRequest('/api/transfers', {
@@ -55,12 +172,16 @@ export default function DispatchModule({
           dispatchedQty: totalPieces,
           sourceBranchId: sourceBranchId || branches[0]?.id,
           destinationBranchId,
-          vehicleId: vehicleId || vehicles[0]?.id,
+          vehicleId,
           expectedTransitMinutes,
           notes,
         }),
       });
       setActivePass(created);
+      // After successful dispatch, the vehicle is now in LOADING/IN_USE.
+      // Select next available vehicle for convenience.
+      const remaining = inYardVehicles.filter((v) => v.id !== vehicleId);
+      setVehicleId(remaining[0]?.id || '');
       onTransferCreated();
     } catch (err) {
       setError(err.message);
@@ -201,26 +322,149 @@ export default function DispatchModule({
             </div>
           </div>
 
-          {/* Vehicle & Expected Transit SLA */}
-          <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
-            <div className="sm:col-span-2">
-              <label className="block text-xs font-semibold uppercase tracking-wider text-slate-400 mb-1.5">
-                Assigned Transport Vehicle & Driver *
+          {/* Section 03: Dedicated Yard Fleet Presence Selector */}
+          <div className="space-y-3 pt-2">
+            {/* Location-Scoped Vehicle Header */}
+            <div className="flex items-center justify-between border-b border-slate-800 pb-2">
+              <label className="block text-xs font-bold uppercase tracking-wider text-slate-300">
+                Vehicles Currently in Yard ({originBranchName}):{' '}
+                <span className="text-emerald-400 font-extrabold">
+                  {inYardVehicles.length} Available
+                </span>
               </label>
-              <select
-                value={vehicleId}
-                onChange={(e) => setVehicleId(e.target.value)}
-                className="w-full px-3.5 py-2.5 rounded-xl bg-slate-950 border border-slate-800 text-white text-sm focus:border-indigo-500 focus:outline-none"
-              >
-                {vehicles.map((v) => (
-                  <option key={v.id} value={v.id}>
-                    {v.registrationNo} — {v.driverName} ({v.driverPhone})
-                  </option>
-                ))}
-              </select>
+              <span className="text-[11px] text-slate-400 font-mono">
+                Gate Event Synced
+              </span>
             </div>
 
-            <div>
+            {/* Zero State Alert Banner */}
+            {noVehiclesAvailable && !loadingYard ? (
+              <div className="p-4 rounded-xl bg-amber-500/15 border border-amber-500/40 text-amber-200 text-sm flex items-start gap-3">
+                <AlertTriangle className="w-5 h-5 text-amber-400 flex-shrink-0 mt-0.5" />
+                <div>
+                  <div className="font-semibold text-amber-300">Yard Fleet Empty</div>
+                  <div className="text-xs text-amber-200/90 mt-0.5">
+                    No fleet vehicles currently parked in this yard. All vehicles are on transit.
+                  </div>
+                </div>
+              </div>
+            ) : (
+              /* Selectable Vehicle Cards */
+              <div className="space-y-2.5">
+                {inYardVehicles.map((v) => {
+                  const isSelected = vehicleId === v.id;
+                  return (
+                    <div
+                      key={v.id}
+                      onClick={() => setVehicleId(v.id)}
+                      className={`p-3.5 rounded-xl border transition cursor-pointer flex flex-col sm:flex-row sm:items-center justify-between gap-3 ${
+                        isSelected
+                          ? 'border-emerald-500 bg-emerald-950/20 ring-1 ring-emerald-500/50 shadow-md shadow-emerald-950/50'
+                          : 'border-slate-800 bg-slate-950/70 hover:border-slate-700 hover:bg-slate-900/50'
+                      }`}
+                    >
+                      <div className="flex items-start gap-3">
+                        <div
+                          className={`w-5 h-5 rounded-full border mt-0.5 flex items-center justify-center flex-shrink-0 ${
+                            isSelected
+                              ? 'border-emerald-500 bg-emerald-600 text-white'
+                              : 'border-slate-700 bg-slate-900 text-transparent'
+                          }`}
+                        >
+                          <div className="w-2 h-2 rounded-full bg-white" />
+                        </div>
+                        <div>
+                          <div className="flex flex-wrap items-center gap-2">
+                            <Truck className={`w-4 h-4 ${isSelected ? 'text-emerald-400' : 'text-slate-400'}`} />
+                            <span className="font-mono font-bold text-white text-sm">
+                              Lorry Number: {v.registrationNo || v.registrationNumber}
+                            </span>
+                            <span className="text-xs text-slate-300">
+                              ({v.driverName} • {v.driverPhone})
+                            </span>
+                          </div>
+                          <div className="text-xs text-slate-400 mt-1 flex items-center gap-2">
+                            <span>
+                              Bay / State:{' '}
+                              <strong className="text-slate-300">
+                                {v.stateDescription || 'Idle / Ready to load'}
+                              </strong>
+                            </span>
+                          </div>
+                        </div>
+                      </div>
+
+                      {/* Status Badge: In Yard */}
+                      <div className="flex items-center sm:self-center self-start">
+                        <span className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full text-xs font-semibold bg-emerald-500/15 border border-emerald-500/30 text-emerald-300">
+                          <span className="w-2 h-2 rounded-full bg-emerald-400 animate-pulse" />
+                          In Yard • Ready to Load
+                        </span>
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+            )}
+
+            {/* Inbound / Inactive Vehicle Cards (Visual transparency) */}
+            {inboundVehicles.length > 0 && (
+              <div className="pt-2 border-t border-slate-800/80">
+                <button
+                  type="button"
+                  onClick={() => setShowInbound(!showInbound)}
+                  className="flex items-center gap-2 text-xs font-semibold text-slate-400 hover:text-slate-200 transition mb-2"
+                >
+                  {showInbound ? <ChevronUp className="w-3.5 h-3.5" /> : <ChevronDown className="w-3.5 h-3.5" />}
+                  <span>Inbound to Yard ({inboundVehicles.length})</span>
+                </button>
+
+                {showInbound && (
+                  <div className="space-y-2">
+                    {inboundVehicles.map((v) => (
+                      <div
+                        key={v.id}
+                        className="p-3.5 rounded-xl border border-slate-800 bg-slate-950/40 opacity-50 cursor-not-allowed select-none flex flex-col sm:flex-row sm:items-center justify-between gap-3"
+                      >
+                        <div>
+                          <div className="flex flex-wrap items-center gap-2">
+                            <Truck className="w-4 h-4 text-slate-500" />
+                            <span className="font-mono font-bold text-slate-300 text-sm">
+                              Lorry Number: {v.registrationNo || v.registrationNumber}
+                            </span>
+                            <span className="text-xs text-slate-400">
+                              ({v.driverName})
+                            </span>
+                          </div>
+                          <div className="text-xs text-slate-400 mt-1 flex items-center gap-1.5">
+                            <Clock className="w-3.5 h-3.5 text-amber-400 flex-shrink-0" />
+                            <span>
+                              SLA / ETA:{' '}
+                              <span className="text-amber-300 font-medium">
+                                {v.activeConsignment?.etaFormatted ||
+                                  `Expected arrival in ~${v.activeConsignment?.etaMinutes || 25} mins (${v.activeConsignment?.transferCode})`}
+                              </span>
+                            </span>
+                          </div>
+                        </div>
+
+                        <div className="flex items-center sm:self-center self-start">
+                          <span className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full text-xs font-semibold bg-sky-500/15 border border-sky-500/30 text-sky-300">
+                            <span className="w-2 h-2 rounded-full bg-sky-400" />
+                            In Transit • En Route from {v.originPlant || v.activeConsignment?.sourceBranch?.branchName || 'Origin Plant'}
+                          </span>
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </div>
+            )}
+          </div>
+
+          {/* Transit SLA & Notes */}
+          <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
+            <div className="sm:col-span-1">
               <label className="block text-xs font-semibold uppercase tracking-wider text-slate-400 mb-1.5">
                 Transit SLA (Minutes)
               </label>
@@ -232,30 +476,43 @@ export default function DispatchModule({
                 className="w-full px-3.5 py-2.5 rounded-xl bg-slate-950 border border-slate-800 text-white text-sm focus:border-indigo-500 focus:outline-none"
               />
             </div>
-          </div>
 
-          <div>
-            <label className="block text-xs font-semibold uppercase tracking-wider text-slate-400 mb-1.5">
-              Dispatch Notes / Seal Number
-            </label>
-            <input
-              type="text"
-              value={notes}
-              onChange={(e) => setNotes(e.target.value)}
-              className="w-full px-3.5 py-2.5 rounded-xl bg-slate-950 border border-slate-800 text-white text-sm focus:border-indigo-500 focus:outline-none"
-              placeholder="Optional security seal number or handling notes"
-            />
+            <div className="sm:col-span-2">
+              <label className="block text-xs font-semibold uppercase tracking-wider text-slate-400 mb-1.5">
+                Dispatch Notes / Seal Number
+              </label>
+              <input
+                type="text"
+                value={notes}
+                onChange={(e) => setNotes(e.target.value)}
+                className="w-full px-3.5 py-2.5 rounded-xl bg-slate-950 border border-slate-800 text-white text-sm focus:border-indigo-500 focus:outline-none"
+                placeholder="Optional security seal number or handling notes"
+              />
+            </div>
           </div>
 
           <button
             type="submit"
-            disabled={submitting}
-            className="w-full py-3.5 px-5 rounded-xl bg-indigo-600 hover:bg-indigo-500 disabled:opacity-50 text-white font-bold text-sm flex items-center justify-center gap-2 shadow-lg shadow-indigo-600/30 transition cursor-pointer"
+            disabled={submitting || noVehiclesAvailable || !vehicleId}
+            className={`w-full py-3.5 px-5 rounded-xl ${
+              noVehiclesAvailable || !vehicleId
+                ? 'bg-slate-700 cursor-not-allowed opacity-50'
+                : 'bg-indigo-600 hover:bg-indigo-500 shadow-lg shadow-indigo-600/30 cursor-pointer'
+            } text-white font-bold text-sm flex items-center justify-center gap-2 transition`}
           >
-            <QrCode className="w-5 h-5" />
-            {submitting
-              ? 'Generating Cryptographic Master QR Gate Pass...'
-              : `Generate Master Transfer QR Gate Pass (${totalPieces.toLocaleString()} Pieces)`}
+            {noVehiclesAvailable || !vehicleId ? (
+              <>
+                <AlertTriangle className="w-5 h-5 text-amber-400" />
+                No Fleet Vehicles Available in Yard
+              </>
+            ) : (
+              <>
+                <QrCode className="w-5 h-5" />
+                {submitting
+                  ? 'Generating Cryptographic Master QR Gate Pass...'
+                  : `Generate Master Transfer QR Gate Pass (${totalPieces.toLocaleString()} Pieces)`}
+              </>
+            )}
           </button>
         </form>
 

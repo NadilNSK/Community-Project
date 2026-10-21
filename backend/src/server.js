@@ -7,6 +7,7 @@ const dispatchRoutes = require('./modules/dispatch/dispatch.routes');
 const scannerRoutes = require('./modules/scanner/scanner.routes');
 const discrepancyRoutes = require('./modules/discrepancies/discrepancy.routes');
 const dashboardRoutes = require('./modules/dashboard/dashboard.routes');
+const vehicleRoutes = require('./modules/vehicles/vehicle.routes');
 
 const app = express();
 const PORT = process.env.PORT || 4000;
@@ -25,10 +26,12 @@ app.get('/api/health', (req, res) => {
   });
 });
 
-// Register 5 Core System Modules
+// Register System Modules
 app.use('/api/auth', authRoutes);
 app.use('/api/transfers', dispatchRoutes);
 app.use('/api/scanner', scannerRoutes);
+app.use('/api/gate', scannerRoutes);
+app.use('/api/vehicles', vehicleRoutes);
 app.use('/api/discrepancies', discrepancyRoutes);
 app.use('/api/dashboard', dashboardRoutes);
 

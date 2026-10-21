@@ -102,6 +102,8 @@ const INITIAL_VEHICLES = [
     driverNic: '198424501234',
     driverPhone: '0774123980',
     vehicleType: '16ft Container Lorry',
+    currentBranchId: 'br-sew-01',
+    status: 'IN_YARD',
   },
   {
     id: 'veh-02',
@@ -110,6 +112,8 @@ const INITIAL_VEHICLES = [
     driverNic: '199011204589',
     driverPhone: '0718456321',
     vehicleType: '14.5ft Box Lorry',
+    currentBranchId: null,
+    status: 'IN_TRANSIT',
   },
   {
     id: 'veh-03',
@@ -118,6 +122,8 @@ const INITIAL_VEHICLES = [
     driverNic: '198730108912',
     driverPhone: '0762349811',
     vehicleType: 'Covered Alu-Van',
+    currentBranchId: 'br-sew-01',
+    status: 'IN_YARD',
   },
 ];
 
@@ -387,8 +393,47 @@ export async function handleLocalApiRequest(path, options = {}) {
     }
   }
 
-  // 3. GET /api/auth/vehicles & POST /api/auth/vehicles
-  if (path === '/api/auth/vehicles') {
+  // 3. GET /api/vehicles/available & GET /api/auth/vehicles/available
+  if (path.startsWith('/api/vehicles/available') || path.startsWith('/api/auth/vehicles/available')) {
+    const urlParts = path.split('?');
+    const params = new URLSearchParams(urlParts[1] || '');
+    const branchId = params.get('branchId') || currentUser?.assignedBranchId || db.branches[0].id;
+    const inYard = db.vehicles
+      .filter((v) => (v.currentBranchId === branchId) && (v.status === 'IN_YARD' || !v.status))
+      .map((v) => ({
+        ...v,
+        registrationNumber: v.registrationNo,
+        checkedInTime: '08:30 AM',
+        stateDescription: 'Idle / Ready to load',
+      }));
+
+    const inbound = db.vehicles
+      .filter((v) => v.status === 'IN_TRANSIT')
+      .map((v) => {
+        const transfer = db.consignments.find(
+          (c) => c.vehicleId === v.id && c.destinationBranchId === branchId && (c.status === 'IN_TRANSIT' || c.status === 'CREATED')
+        );
+        if (!transfer) return null;
+        const sourceBr = db.branches.find((b) => b.id === transfer.sourceBranchId);
+        return {
+          ...v,
+          registrationNumber: v.registrationNo,
+          originPlant: sourceBr?.branchName || 'Origin Plant',
+          activeConsignment: {
+            id: transfer.id,
+            transferCode: transfer.transferCode,
+            etaMinutes: 25,
+            etaFormatted: `Expected arrival in ~25 mins (${transfer.transferCode})`,
+          },
+        };
+      })
+      .filter(Boolean);
+
+    return { branchId, inYard, inbound };
+  }
+
+  // GET /api/auth/vehicles, /api/vehicles & POST /api/auth/vehicles
+  if (path === '/api/auth/vehicles' || path === '/api/vehicles') {
     if (method === 'GET') {
       return db.vehicles;
     }
@@ -400,6 +445,8 @@ export async function handleLocalApiRequest(path, options = {}) {
         driverNic: body.driverNic || '199000000000',
         driverPhone: body.driverPhone,
         vehicleType: body.vehicleType || '16ft Container Lorry',
+        currentBranchId: body.currentBranchId || db.branches[0].id,
+        status: 'IN_YARD',
       };
       db.vehicles.push(newVehicle);
       await saveDb(db);
@@ -466,6 +513,20 @@ export async function handleLocalApiRequest(path, options = {}) {
       return db.consignments.map((c) => hydrateConsignment(c, db));
     }
     if (method === 'POST') {
+      const selectedVehicleId = body.vehicleId || db.vehicles[0].id;
+      const v = db.vehicles.find((veh) => veh.id === selectedVehicleId);
+      const originId = body.sourceBranchId || db.branches[0].id;
+
+      if (v) {
+        if (v.currentBranchId && v.currentBranchId !== originId) {
+          throw new Error(`Vehicle ${v.registrationNo} is not in this yard. Only vehicles parked inside this facility can be dispatched.`);
+        }
+        if (v.status && v.status !== 'IN_YARD') {
+          throw new Error(`Vehicle ${v.registrationNo} is currently ${v.status}. Only vehicles in yard and idle can be dispatched.`);
+        }
+        v.status = 'LOADING';
+      }
+
       const nextNum = 1001 + db.consignments.length;
       const transferCode = `TR-2026-${nextNum}`;
       const qrPassHash = makeSimpleHash(`${transferCode}-${body.garmentStyle}-${Date.now()}`);
@@ -482,9 +543,9 @@ export async function handleLocalApiRequest(path, options = {}) {
         qrDataUrl: `https://api.qrserver.com/v1/create-qr-code/?size=300x300&data=${encodeURIComponent(
           transferCode
         )}`,
-        sourceBranchId: body.sourceBranchId || db.branches[0].id,
+        sourceBranchId: originId,
         destinationBranchId: body.destinationBranchId || db.branches[1].id,
-        vehicleId: body.vehicleId || db.vehicles[0].id,
+        vehicleId: selectedVehicleId,
         createdById: currentUser?.id || 'usr-dispatch',
         expectedTransitMinutes: Number(body.expectedTransitMinutes) || 120,
         notes: body.notes || '',
@@ -519,7 +580,7 @@ export async function handleLocalApiRequest(path, options = {}) {
     );
   };
 
-  // 7. Scanner Endpoints
+  // 7. Scanner Endpoints & Gate Aliases
   if (path === '/api/scanner/verify-qr' && method === 'POST') {
     const found = findConsignment(body.qrPayload);
     if (!found) {
@@ -531,13 +592,21 @@ export async function handleLocalApiRequest(path, options = {}) {
     };
   }
 
-  if (path === '/api/scanner/gate-out' && method === 'POST') {
+  if ((path === '/api/scanner/gate-out' || path === '/api/gate/exit') && method === 'POST') {
     const found = findConsignment(body.qrPayload);
     if (!found) {
       throw new Error(`Gate pass '${body.qrPayload}' not found.`);
     }
     found.status = 'IN_TRANSIT';
     found.dispatchedAt = new Date().toISOString();
+
+    // Automatic State Transition: Departure -> In Transit
+    const veh = db.vehicles.find((v) => v.id === found.vehicleId);
+    if (veh) {
+      veh.status = 'IN_TRANSIT';
+      veh.currentBranchId = null;
+    }
+
     found.scanLogs = found.scanLogs || [];
     found.scanLogs.push({
       id: `sc-${Date.now()}`,
@@ -554,11 +623,19 @@ export async function handleLocalApiRequest(path, options = {}) {
     };
   }
 
-  if (path === '/api/scanner/gate-in' && method === 'POST') {
+  if ((path === '/api/scanner/gate-in' || path === '/api/gate/entry') && method === 'POST') {
     const found = findConsignment(body.qrPayload);
     if (!found) {
       throw new Error(`Gate pass '${body.qrPayload}' not found.`);
     }
+
+    // Automatic State Transition: Arrival -> In Destination Yard
+    const veh = db.vehicles.find((v) => v.id === found.vehicleId);
+    if (veh) {
+      veh.status = 'IN_YARD';
+      veh.currentBranchId = found.destinationBranchId;
+    }
+
     found.scanLogs = found.scanLogs || [];
     found.scanLogs.push({
       id: `sc-${Date.now()}`,
@@ -575,7 +652,7 @@ export async function handleLocalApiRequest(path, options = {}) {
     };
   }
 
-  if (path === '/api/scanner/receive' && method === 'POST') {
+  if ((path === '/api/scanner/receive' || path === '/api/gate/intake') && method === 'POST') {
     const found = findConsignment(body.qrPayload);
     if (!found) {
       throw new Error(`Gate pass '${body.qrPayload}' not found.`);
@@ -584,6 +661,13 @@ export async function handleLocalApiRequest(path, options = {}) {
     found.receivedQty = recQty;
     found.receivedAt = new Date().toISOString();
     const variance = recQty - Number(found.dispatchedQty);
+
+    // Automatic State Transition: Intake Verified -> In Destination Yard
+    const veh = db.vehicles.find((v) => v.id === found.vehicleId);
+    if (veh) {
+      veh.status = 'IN_YARD';
+      veh.currentBranchId = found.destinationBranchId;
+    }
 
     found.scanLogs = found.scanLogs || [];
     found.scanLogs.push({

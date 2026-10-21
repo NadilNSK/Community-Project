@@ -138,6 +138,130 @@ router.get('/vehicles', authenticateToken, async (req, res) => {
 });
 
 /**
+ * GET /api/auth/vehicles/available
+ * Fleet Query API:
+ * - If branchId query param is provided: returns { branchId, inYard, inbound }
+ * - Otherwise: returns array of active IN_YARD vehicles
+ */
+router.get('/vehicles/available', authenticateToken, async (req, res) => {
+  try {
+    const branchId = req.query.branchId;
+
+    if (branchId) {
+      const inYardVehicles = await prisma.vehicle.findMany({
+        where: {
+          currentBranchId: branchId,
+          status: 'IN_YARD',
+          isActive: true,
+        },
+        include: {
+          currentBranch: true,
+          transfers: {
+            orderBy: { createdAt: 'desc' },
+            take: 1,
+            select: { id: true, transferCode: true, gateInTimestamp: true, receivedTimestamp: true },
+          },
+        },
+        orderBy: { registrationNo: 'asc' },
+      });
+
+      const inYard = inYardVehicles.map((v) => {
+        const lastTransfer = v.transfers?.[0];
+        const checkInTime = lastTransfer?.gateInTimestamp || lastTransfer?.receivedTimestamp || v.updatedAt;
+        const formattedCheckIn = checkInTime
+          ? new Date(checkInTime).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
+          : '08:30 AM';
+        return {
+          id: v.id,
+          registrationNo: v.registrationNo,
+          registrationNumber: v.registrationNo,
+          driverName: v.driverName,
+          driverPhone: v.driverPhone,
+          driverNic: v.driverNic,
+          vehicleType: v.vehicleType,
+          status: v.status,
+          currentBranchId: v.currentBranchId,
+          currentBranch: v.currentBranch,
+          checkedInTime: formattedCheckIn,
+          stateDescription: 'Idle / Ready to load',
+        };
+      });
+
+      const inTransitVehicles = await prisma.vehicle.findMany({
+        where: {
+          status: 'IN_TRANSIT',
+          isActive: true,
+        },
+        include: {
+          transfers: {
+            where: {
+              destinationBranchId: branchId,
+              status: { in: ['IN_TRANSIT', 'CREATED'] },
+            },
+            include: { sourceBranch: true, destinationBranch: true },
+            orderBy: { createdAt: 'desc' },
+            take: 1,
+          },
+        },
+        orderBy: { registrationNo: 'asc' },
+      });
+
+      const inbound = inTransitVehicles
+        .filter((v) => v.transfers && v.transfers.length > 0)
+        .map((v) => {
+          const transfer = v.transfers[0];
+          const elapsed = transfer.dispatchTimestamp
+            ? Math.floor((Date.now() - new Date(transfer.dispatchTimestamp).getTime()) / 60000)
+            : 0;
+          const eta = Math.max(5, (transfer.expectedTransitMinutes || 120) - elapsed);
+          return {
+            id: v.id,
+            registrationNo: v.registrationNo,
+            registrationNumber: v.registrationNo,
+            driverName: v.driverName,
+            driverPhone: v.driverPhone,
+            driverNic: v.driverNic,
+            vehicleType: v.vehicleType,
+            status: v.status,
+            originPlant: transfer.sourceBranch?.branchName || 'Origin Facility',
+            activeConsignment: {
+              id: transfer.id,
+              transferCode: transfer.transferCode,
+              sourceBranch: transfer.sourceBranch,
+              destinationBranch: transfer.destinationBranch,
+              dispatchTimestamp: transfer.dispatchTimestamp,
+              expectedTransitMinutes: transfer.expectedTransitMinutes,
+              etaMinutes: eta,
+              etaFormatted: `Expected arrival in ~${eta} mins (${transfer.transferCode})`,
+            },
+          };
+        });
+
+      return res.json({
+        branchId,
+        inYard,
+        inbound,
+      });
+    }
+
+    const vehicles = await prisma.vehicle.findMany({
+      where: {
+        isActive: true,
+        status: 'IN_YARD',
+      },
+      include: {
+        currentBranch: true,
+      },
+      orderBy: { registrationNo: 'asc' },
+    });
+
+    res.json(vehicles.map((v) => ({ ...v, registrationNumber: v.registrationNo })));
+  } catch (err) {
+    res.status(500).json({ error: 'Failed to fetch available vehicles.' });
+  }
+});
+
+/**
  * POST /api/auth/vehicles (Admin & Dispatch Officer)
  */
 router.post('/vehicles', authenticateToken, authorizeRoles('SYSTEM_ADMIN', 'DISPATCH_OFFICER'), async (req, res) => {

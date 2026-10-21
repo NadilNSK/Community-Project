@@ -47,6 +47,13 @@ enum ScanType {
   INTAKE_VERIFICATION
 }
 
+enum VehicleStatus {
+  IN_YARD
+  LOADING
+  IN_TRANSIT
+  MAINTENANCE
+}
+
 model Branch {
   id              String     @id @default(uuid()) @map("branch_id")
   branchCode      String     @unique @map("branch_code")
@@ -60,6 +67,7 @@ model Branch {
   users               User[]                @relation("BranchUsers")
   dispatchedTransfers TransferConsignment[] @relation("SourceBranch")
   receivedTransfers   TransferConsignment[] @relation("DestinationBranch")
+  vehicles            Vehicle[]             @relation("BranchVehicles")
 
   @@map("branches")
 }
@@ -90,17 +98,20 @@ model User {
 }
 
 model Vehicle {
-  id             String   @id @default(uuid()) @map("vehicle_id")
-  registrationNo String   @unique @map("registration_no")
-  driverName     String   @map("driver_name")
-  driverNic      String   @map("driver_nic")
-  driverPhone    String   @map("driver_phone")
-  vehicleType    String   @default("Lorry") @map("vehicle_type")
-  isActive       Boolean  @default(true) @map("is_active")
-  createdAt      DateTime @default(now()) @map("created_at")
-  updatedAt      DateTime @updatedAt @map("updated_at")
+  id              String         @id @default(uuid()) @map("vehicle_id")
+  registrationNo  String         @unique @map("registration_no")
+  driverName      String         @map("driver_name")
+  driverNic       String         @map("driver_nic")
+  driverPhone     String         @map("driver_phone")
+  vehicleType     String         @default("Lorry") @map("vehicle_type")
+  currentBranchId String?        @map("current_branch_id")
+  status          VehicleStatus  @default(IN_YARD)
+  isActive        Boolean        @default(true) @map("is_active")
+  createdAt       DateTime       @default(now()) @map("created_at")
+  updatedAt       DateTime       @updatedAt @map("updated_at")
 
-  transfers TransferConsignment[]
+  currentBranch   Branch?               @relation("BranchVehicles", fields: [currentBranchId], references: [id])
+  transfers       TransferConsignment[]
 
   @@map("vehicles")
 }

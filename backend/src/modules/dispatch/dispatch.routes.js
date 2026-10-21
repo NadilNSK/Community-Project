@@ -9,9 +9,27 @@ const router = express.Router();
  * Helper to generate human-readable sequential Transfer Gate Pass Code (e.g., GP-2026-0005)
  */
 async function generateNextTransferCode() {
+  const latest = await prisma.transferConsignment.findFirst({
+    where: {
+      transferCode: {
+        startsWith: 'GP-2026-',
+      },
+    },
+    orderBy: {
+      transferCode: 'desc',
+    },
+  });
+
+  if (latest && latest.transferCode) {
+    const match = latest.transferCode.match(/GP-2026-(\d+)/);
+    if (match) {
+      const nextNum = parseInt(match[1], 10) + 1;
+      return `GP-2026-${String(nextNum).padStart(4, '0')}`;
+    }
+  }
+
   const count = await prisma.transferConsignment.count();
-  const nextNumber = String(count + 1).padStart(4, '0');
-  return `GP-2026-${nextNumber}`;
+  return `GP-2026-${String(count + 1).padStart(4, '0')}`;
 }
 
 /**
@@ -90,6 +108,38 @@ router.post(
         });
       }
 
+      // Validate vehicle physical location and yard presence
+      const vehicle = await prisma.vehicle.findUnique({
+        where: { id: vehicleId },
+        include: { currentBranch: true },
+      });
+
+      if (!vehicle) {
+        return res.status(400).json({ error: 'Selected vehicle not found.' });
+      }
+
+      if (vehicle.currentBranchId !== resolvedSourceBranchId || vehicle.status !== 'IN_YARD') {
+        return res.status(400).json({
+          error: `Vehicle ${vehicle.registrationNo} cannot be dispatched. Only vehicles physically inside this yard with status 'IN_YARD' are available for loading (Current Status: ${vehicle.status}, Location: ${vehicle.currentBranch?.branchName || 'In Transit'}).`,
+        });
+      }
+
+      // Server-side vehicle availability validation — prevent duplicate simultaneous dispatches
+      const activeTransferForVehicle = await prisma.transferConsignment.findFirst({
+        where: {
+          vehicleId,
+          status: {
+            notIn: ['RECEIVED', 'RESOLVED'],
+          },
+        },
+      });
+
+      if (activeTransferForVehicle) {
+        return res.status(400).json({
+          error: `Vehicle is currently assigned to active transfer ${activeTransferForVehicle.transferCode}. It will become available once the consignment is received at the destination.`,
+        });
+      }
+
       const parsedSizes = sizeBreakdown && typeof sizeBreakdown === 'object' ? sizeBreakdown : { Total: Number(dispatchedQty) || 0 };
       const computedTotal =
         Number(dispatchedQty) ||
@@ -129,6 +179,14 @@ router.post(
           destinationBranch: true,
           vehicle: true,
           dispatchedBy: { select: { id: true, fullName: true, username: true } },
+        },
+      });
+
+      // Update vehicle status to LOADING (assigned to new pass, awaiting gate exit)
+      await prisma.vehicle.update({
+        where: { id: vehicleId },
+        data: {
+          status: 'LOADING',
         },
       });
 

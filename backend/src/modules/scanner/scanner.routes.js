@@ -107,6 +107,17 @@ async function processScanOperation({
       },
       include: { sourceBranch: true, destinationBranch: true, vehicle: true, discrepancy: true },
     });
+
+    // Gate Exit Scan (Departure): Vehicle is now on the road
+    if (consignment.vehicleId) {
+      await prisma.vehicle.update({
+        where: { id: consignment.vehicleId },
+        data: {
+          status: 'IN_TRANSIT',
+          currentBranchId: null,
+        },
+      });
+    }
   } else if (scanType === 'DESTINATION_IN') {
     updatedConsignment = await prisma.transferConsignment.update({
       where: { id: consignment.id },
@@ -115,6 +126,17 @@ async function processScanOperation({
       },
       include: { sourceBranch: true, destinationBranch: true, vehicle: true, discrepancy: true },
     });
+
+    // Gate Entry Scan (Arrival): Vehicle is physically in destination yard
+    if (consignment.vehicleId) {
+      await prisma.vehicle.update({
+        where: { id: consignment.vehicleId },
+        data: {
+          status: 'IN_YARD',
+          currentBranchId: consignment.destinationBranchId,
+        },
+      });
+    }
   } else if (scanType === 'INTAKE_VERIFICATION') {
     const verifiedQty = Number(recordedQty);
     if (Number.isNaN(verifiedQty) || verifiedQty < 0) {
@@ -136,6 +158,17 @@ async function processScanOperation({
       },
       include: { sourceBranch: true, destinationBranch: true, vehicle: true },
     });
+
+    // Gate Entry / Intake Verified: Vehicle is confirmed in destination yard
+    if (consignment.vehicleId) {
+      await prisma.vehicle.update({
+        where: { id: consignment.vehicleId },
+        data: {
+          status: 'IN_YARD',
+          currentBranchId: consignment.destinationBranchId,
+        },
+      });
+    }
 
     if (hasDiscrepancy) {
       discrepancyCreated = await prisma.discrepancyLog.upsert({
@@ -373,5 +406,100 @@ router.post('/sync', authenticateToken, async (req, res) => {
     res.status(500).json({ error: 'Offline sync batch processing failed.' });
   }
 });
+
+/**
+ * Direct Gate Operation Aliases:
+ * POST /api/gate/exit (Departure scan)
+ * POST /api/gate/entry (Arrival scan)
+ * POST /api/gate/intake (Receiving piece count verification)
+ */
+router.post(
+  '/exit',
+  authenticateToken,
+  authorizeRoles('GATE_SECURITY', 'DISPATCH_OFFICER', 'LOGISTICS_MANAGER', 'SYSTEM_ADMIN'),
+  async (req, res) => {
+    try {
+      const { qrPayload, clientScanId, scannedAt } = req.body;
+      const consignment = await resolveAndVerifyQrInput(qrPayload);
+
+      const result = await processScanOperation({
+        consignmentId: consignment.id,
+        scanType: 'DEPARTURE_OUT',
+        userId: req.user.id,
+        scannedAt,
+        clientScanId,
+        wasOfflineQueue: false,
+      });
+
+      res.json({
+        message: `Consignment ${consignment.transferCode} cleared exit gate. Status: IN-TRANSIT.`,
+        ...result,
+      });
+    } catch (err) {
+      res.status(400).json({ error: err.message || 'Gate Exit scan failed.' });
+    }
+  }
+);
+
+router.post(
+  '/entry',
+  authenticateToken,
+  authorizeRoles('GATE_SECURITY', 'RECEIVING_OFFICER', 'LOGISTICS_MANAGER', 'SYSTEM_ADMIN'),
+  async (req, res) => {
+    try {
+      const { qrPayload, clientScanId, scannedAt } = req.body;
+      const consignment = await resolveAndVerifyQrInput(qrPayload);
+
+      const result = await processScanOperation({
+        consignmentId: consignment.id,
+        scanType: 'DESTINATION_IN',
+        userId: req.user.id,
+        scannedAt,
+        clientScanId,
+        wasOfflineQueue: false,
+      });
+
+      res.json({
+        message: `Vehicle arrival logged at ${consignment.destinationBranch.branchName} gate.`,
+        ...result,
+      });
+    } catch (err) {
+      res.status(400).json({ error: err.message || 'Gate Entry scan failed.' });
+    }
+  }
+);
+
+router.post(
+  '/intake',
+  authenticateToken,
+  authorizeRoles('RECEIVING_OFFICER', 'GATE_SECURITY', 'LOGISTICS_MANAGER', 'SYSTEM_ADMIN'),
+  async (req, res) => {
+    try {
+      const { qrPayload, receivedQty, comments, clientScanId, scannedAt } = req.body;
+      const consignment = await resolveAndVerifyQrInput(qrPayload);
+
+      const result = await processScanOperation({
+        consignmentId: consignment.id,
+        scanType: 'INTAKE_VERIFICATION',
+        userId: req.user.id,
+        recordedQty: receivedQty,
+        scannedAt,
+        clientScanId,
+        wasOfflineQueue: false,
+        comments,
+      });
+
+      const hasDiscrepancy = result.consignment.status === 'DISCREPANCY';
+      res.json({
+        message: hasDiscrepancy
+          ? `DISCREPANCY DETECTED! Dispatched ${consignment.dispatchedQty} pcs vs Received ${receivedQty} pcs.`
+          : `Consignment ${consignment.transferCode} verified and RECEIVED (${receivedQty} pcs matched).`,
+        ...result,
+      });
+    } catch (err) {
+      res.status(400).json({ error: err.message || 'Intake scan failed.' });
+    }
+  }
+);
 
 module.exports = router;
