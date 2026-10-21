@@ -16,6 +16,7 @@ export default function AdminModule({ branches, vehicles, onMasterDataUpdated })
     driverNic: '',
     driverPhone: '',
     vehicleType: 'Covered Container Lorry (16ft)',
+    assignedBranchId: '',
   });
   const [newUser, setNewUser] = useState({
     username: '',
@@ -57,10 +58,18 @@ export default function AdminModule({ branches, vehicles, onMasterDataUpdated })
 
   const handleCreateVehicle = async (e) => {
     e.preventDefault();
+    if (!newVehicle.assignedBranchId) {
+      setStatusMsg('Error: Please select an assigned home branch / base yard for this vehicle.');
+      return;
+    }
     try {
       await apiRequest('/api/auth/vehicles', {
         method: 'POST',
-        body: JSON.stringify(newVehicle),
+        body: JSON.stringify({
+          ...newVehicle,
+          plateNumber: newVehicle.registrationNo,
+          currentBranchId: newVehicle.assignedBranchId,
+        }),
       });
       setNewVehicle({
         registrationNo: '',
@@ -68,8 +77,9 @@ export default function AdminModule({ branches, vehicles, onMasterDataUpdated })
         driverNic: '',
         driverPhone: '',
         vehicleType: 'Covered Container Lorry (16ft)',
+        assignedBranchId: '',
       });
-      setStatusMsg('New fleet vehicle & driver registered successfully.');
+      setStatusMsg('New fleet vehicle & driver registered successfully to base yard.');
       onMasterDataUpdated();
     } catch (err) {
       setStatusMsg(`Error: ${err.message}`);
@@ -254,23 +264,48 @@ export default function AdminModule({ branches, vehicles, onMasterDataUpdated })
         >
           <h3 className="text-base font-bold text-white flex items-center gap-2">
             <Truck className="w-5 h-5 text-sky-400" />
-            Register Fleet Vehicle & Driver
+            Register Transport Vehicle
           </h3>
           <input
             type="text"
             required
-            placeholder="Vehicle Reg No (e.g., WP NC-7721)"
+            placeholder="Vehicle Reg No / Plate Number (e.g., WP NC-7721)"
             value={newVehicle.registrationNo}
             onChange={(e) => setNewVehicle({ ...newVehicle, registrationNo: e.target.value })}
-            className="w-full px-3 py-2 rounded-xl bg-slate-950 border border-slate-800 text-sm text-white"
+            className="w-full px-3 py-2 rounded-xl bg-slate-950 border border-slate-800 text-sm text-white focus:outline-none focus:border-sky-500"
           />
+          <input
+            type="text"
+            placeholder="Vehicle Type (e.g., 16ft Container Lorry)"
+            value={newVehicle.vehicleType}
+            onChange={(e) => setNewVehicle({ ...newVehicle, vehicleType: e.target.value })}
+            className="w-full px-3 py-2 rounded-xl bg-slate-950 border border-slate-800 text-sm text-white focus:outline-none focus:border-sky-500"
+          />
+          <div>
+            <label className="block text-[10px] font-bold uppercase tracking-wider text-slate-400 mb-1">
+              ASSIGNED HOME BRANCH / BASE YARD *
+            </label>
+            <select
+              required
+              value={newVehicle.assignedBranchId}
+              onChange={(e) => setNewVehicle({ ...newVehicle, assignedBranchId: e.target.value })}
+              className="w-full px-3 py-2 rounded-xl bg-slate-950 border border-slate-800 text-sm text-white focus:outline-none focus:border-sky-500"
+            >
+              <option value="" disabled>Select Base Plant Yard</option>
+              {branches.map((b) => (
+                <option key={b.id} value={b.id}>
+                  {b.branchName} ({b.branchType})
+                </option>
+              ))}
+            </select>
+          </div>
           <input
             type="text"
             required
             placeholder="Driver Full Name"
             value={newVehicle.driverName}
             onChange={(e) => setNewVehicle({ ...newVehicle, driverName: e.target.value })}
-            className="w-full px-3 py-2 rounded-xl bg-slate-950 border border-slate-800 text-sm text-white"
+            className="w-full px-3 py-2 rounded-xl bg-slate-950 border border-slate-800 text-sm text-white focus:outline-none focus:border-sky-500"
           />
           <div className="grid grid-cols-2 gap-2">
             <input
@@ -279,31 +314,69 @@ export default function AdminModule({ branches, vehicles, onMasterDataUpdated })
               placeholder="Driver NIC"
               value={newVehicle.driverNic}
               onChange={(e) => setNewVehicle({ ...newVehicle, driverNic: e.target.value })}
-              className="w-full px-3 py-2 rounded-xl bg-slate-950 border border-slate-800 text-sm text-white"
+              className="w-full px-3 py-2 rounded-xl bg-slate-950 border border-slate-800 text-sm text-white focus:outline-none focus:border-sky-500"
             />
             <input
               type="text"
               required
-              placeholder="Driver Mobile"
+              placeholder="Driver Mobile / Phone"
               value={newVehicle.driverPhone}
               onChange={(e) => setNewVehicle({ ...newVehicle, driverPhone: e.target.value })}
-              className="w-full px-3 py-2 rounded-xl bg-slate-950 border border-slate-800 text-sm text-white"
+              className="w-full px-3 py-2 rounded-xl bg-slate-950 border border-slate-800 text-sm text-white focus:outline-none focus:border-sky-500"
             />
           </div>
-          <input
-            type="text"
-            placeholder="Vehicle Type (e.g., 16ft Container Lorry)"
-            value={newVehicle.vehicleType}
-            onChange={(e) => setNewVehicle({ ...newVehicle, vehicleType: e.target.value })}
-            className="w-full px-3 py-2 rounded-xl bg-slate-950 border border-slate-800 text-sm text-white"
-          />
           <button
             type="submit"
             className="w-full py-2.5 rounded-xl bg-sky-600 hover:bg-sky-500 text-white font-bold text-xs uppercase tracking-wider cursor-pointer"
           >
-            + Register Vehicle
+            + Add Vehicle to Fleet
           </button>
         </form>
+      </div>
+
+      {/* Registered Fleet Cards */}
+      <div className="bg-slate-900 border border-slate-800 rounded-2xl p-5">
+        <h3 className="text-base font-bold text-white mb-3 flex items-center justify-between">
+          <span className="flex items-center gap-2">
+            <Truck className="w-5 h-5 text-sky-400" />
+            Registered Fleet Vehicles & Home Base Yards ({vehicles?.length || 0})
+          </span>
+          <span className="text-xs text-slate-400 font-normal">Active Transporters in Fleet</span>
+        </h3>
+        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+          {vehicles && vehicles.map((v) => {
+            const branchName =
+              v.currentBranch?.branchName ||
+              branches.find((b) => b.id === v.currentBranchId)?.branchName ||
+              'Adhikarigama Sewing Plant';
+            const statusLabel = v.status === 'IN_YARD' || !v.status ? 'In Yard' : v.status;
+            const regNo = v.registrationNo || v.registrationNumber || 'VEHICLE';
+            return (
+              <div
+                key={v.id}
+                className="p-4 rounded-xl bg-slate-950/80 border border-slate-800/80 flex flex-col justify-between space-y-3 hover:border-slate-700 transition"
+              >
+                <div className="flex items-start justify-between">
+                  <div>
+                    <span className="text-xs uppercase font-bold text-slate-400 tracking-wider">Lorry:</span>
+                    <h4 className="text-base font-bold text-white tracking-wide font-mono">{regNo}</h4>
+                  </div>
+                  <span className="px-2.5 py-0.5 rounded-full text-[11px] font-bold bg-amber-500/15 text-amber-300 border border-amber-500/30">
+                    {v.vehicleType || '16ft Container Lorry'}
+                  </span>
+                </div>
+                <div className="space-y-1 text-xs">
+                  <p className="text-slate-300">
+                    <span className="text-slate-400 font-medium">Details:</span> Driver: {v.driverName} • {v.driverPhone}
+                  </p>
+                  <p className="text-sky-300 font-semibold flex items-center gap-1">
+                    <span>Base:</span> 📍 {branchName} ({statusLabel})
+                  </p>
+                </div>
+              </div>
+            );
+          })}
+        </div>
       </div>
 
       {/* Active Users & RBAC Directory */}

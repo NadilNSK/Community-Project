@@ -435,22 +435,32 @@ export async function handleLocalApiRequest(path, options = {}) {
   // GET /api/auth/vehicles, /api/vehicles & POST /api/auth/vehicles
   if (path === '/api/auth/vehicles' || path === '/api/vehicles') {
     if (method === 'GET') {
-      return db.vehicles;
+      return db.vehicles.map((v) => ({
+        ...v,
+        registrationNumber: v.registrationNo,
+        currentBranch: db.branches.find((b) => b.id === v.currentBranchId),
+      }));
     }
     if (method === 'POST') {
+      const branchId = body.assignedBranchId || body.currentBranchId || db.branches[0].id;
+      const regNo = (body.registrationNo || body.plateNumber || '').toUpperCase().trim();
       const newVehicle = {
         id: `veh-${Date.now()}`,
-        registrationNo: body.registrationNo,
+        registrationNo: regNo,
+        registrationNumber: regNo,
         driverName: body.driverName,
         driverNic: body.driverNic || '199000000000',
         driverPhone: body.driverPhone,
         vehicleType: body.vehicleType || '16ft Container Lorry',
-        currentBranchId: body.currentBranchId || db.branches[0].id,
+        currentBranchId: branchId,
         status: 'IN_YARD',
       };
       db.vehicles.push(newVehicle);
       await saveDb(db);
-      return newVehicle;
+      return {
+        ...newVehicle,
+        currentBranch: db.branches.find((b) => b.id === branchId),
+      };
     }
   }
 

@@ -143,15 +143,41 @@ router.get('/available', authenticateToken, async (req, res) => {
  * GET /api/vehicles
  * Returns all active vehicles
  */
-router.get('/', authenticateToken, async (req, res) => {
+/**
+ * POST /api/vehicles
+ * Register a new vehicle assigned to a base plant yard
+ */
+router.post('/', authenticateToken, authorizeRoles('SYSTEM_ADMIN', 'DISPATCH_OFFICER'), async (req, res) => {
   try {
-    const vehicles = await prisma.vehicle.findMany({
-      include: { currentBranch: true },
-      orderBy: { registrationNo: 'asc' },
+    const { registrationNo, plateNumber, driverName, driverNic, driverPhone, vehicleType, assignedBranchId, currentBranchId } = req.body;
+    const regNo = (registrationNo || plateNumber || '').toUpperCase().trim();
+    const branchId = assignedBranchId || currentBranchId;
+
+    if (!regNo || !driverName || !driverPhone || !branchId) {
+      return res.status(400).json({ error: 'Registration number, driver details, and assigned base yard branch are required.' });
+    }
+
+    const vehicle = await prisma.vehicle.create({
+      data: {
+        registrationNo: regNo,
+        driverName: driverName.trim(),
+        driverNic: (driverNic || '199000000000').trim(),
+        driverPhone: driverPhone.trim(),
+        vehicleType: vehicleType || '16ft Container Lorry',
+        currentBranchId: branchId,
+        status: 'IN_YARD',
+      },
+      include: {
+        currentBranch: true,
+      },
     });
-    res.json(vehicles.map((v) => ({ ...v, registrationNumber: v.registrationNo })));
+
+    res.status(201).json({
+      ...vehicle,
+      registrationNumber: vehicle.registrationNo,
+    });
   } catch (err) {
-    res.status(500).json({ error: 'Failed to fetch vehicles.' });
+    res.status(400).json({ error: err.message || 'Failed to register vehicle.' });
   }
 });
 

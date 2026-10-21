@@ -129,9 +129,10 @@ router.post('/branches', authenticateToken, authorizeRoles('SYSTEM_ADMIN'), asyn
 router.get('/vehicles', authenticateToken, async (req, res) => {
   try {
     const vehicles = await prisma.vehicle.findMany({
+      include: { currentBranch: true },
       orderBy: { registrationNo: 'asc' },
     });
-    res.json(vehicles);
+    res.json(vehicles.map((v) => ({ ...v, registrationNumber: v.registrationNo })));
   } catch (err) {
     res.status(500).json({ error: 'Failed to fetch vehicles.' });
   }
@@ -266,20 +267,33 @@ router.get('/vehicles/available', authenticateToken, async (req, res) => {
  */
 router.post('/vehicles', authenticateToken, authorizeRoles('SYSTEM_ADMIN', 'DISPATCH_OFFICER'), async (req, res) => {
   try {
-    const { registrationNo, driverName, driverNic, driverPhone, vehicleType } = req.body;
-    if (!registrationNo || !driverName || !driverNic || !driverPhone) {
-      return res.status(400).json({ error: 'Registration number and driver details are required.' });
+    const { registrationNo, plateNumber, driverName, driverNic, driverPhone, vehicleType, assignedBranchId, currentBranchId } = req.body;
+    const regNo = (registrationNo || plateNumber || '').toUpperCase().trim();
+    const branchId = assignedBranchId || currentBranchId;
+
+    if (!regNo || !driverName || !driverPhone || !branchId) {
+      return res.status(400).json({ error: 'Registration number, driver details, and assigned base yard branch are required.' });
     }
+
     const vehicle = await prisma.vehicle.create({
       data: {
-        registrationNo: registrationNo.toUpperCase().trim(),
-        driverName,
-        driverNic,
-        driverPhone,
-        vehicleType: vehicleType || 'Lorry',
+        registrationNo: regNo,
+        driverName: driverName.trim(),
+        driverNic: (driverNic || '199000000000').trim(),
+        driverPhone: driverPhone.trim(),
+        vehicleType: vehicleType || '16ft Container Lorry',
+        currentBranchId: branchId,
+        status: 'IN_YARD',
+      },
+      include: {
+        currentBranch: true,
       },
     });
-    res.status(201).json(vehicle);
+
+    res.status(201).json({
+      ...vehicle,
+      registrationNumber: vehicle.registrationNo,
+    });
   } catch (err) {
     res.status(400).json({ error: err.message || 'Failed to register vehicle.' });
   }

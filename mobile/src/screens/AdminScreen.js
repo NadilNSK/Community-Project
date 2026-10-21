@@ -56,6 +56,8 @@ export default function AdminScreen({ branches: initialBranches = [], vehicles: 
   const [driverNic, setDriverNic] = useState('');
   const [driverPhone, setDriverPhone] = useState('');
   const [vehicleType, setVehicleType] = useState('16ft Container Lorry');
+  const [vehicleAssignedBranchId, setVehicleAssignedBranchId] = useState('');
+  const [showBranchPicker, setShowBranchPicker] = useState(false);
 
   const loadData = async () => {
     try {
@@ -156,22 +158,31 @@ export default function AdminScreen({ branches: initialBranches = [], vehicles: 
       setFeedback({ type: 'error', text: 'Plate number, driver name, and phone are required.' });
       return;
     }
+    if (!vehicleAssignedBranchId) {
+      setFeedback({ type: 'error', text: 'Please select an assigned home branch / base yard for this vehicle.' });
+      return;
+    }
     try {
       setSubmitting(true);
       await apiRequest('/api/auth/vehicles', {
         method: 'POST',
         body: JSON.stringify({
           registrationNo: registrationNo.toUpperCase().trim(),
+          plateNumber: registrationNo.toUpperCase().trim(),
           driverName: driverName.trim(),
           driverNic: driverNic.trim() || '199000000000',
           driverPhone: driverPhone.trim(),
           vehicleType: vehicleType.trim() || 'Container Lorry',
+          assignedBranchId: vehicleAssignedBranchId,
+          currentBranchId: vehicleAssignedBranchId,
         }),
       });
       setRegistrationNo('');
       setDriverName('');
       setDriverNic('');
       setDriverPhone('');
+      setVehicleAssignedBranchId('');
+      setShowBranchPicker(false);
       setShowForm(false);
       setFeedback({ type: 'success', text: `Vehicle '${registrationNo.toUpperCase()}' added to fleet.` });
       await loadData();
@@ -488,6 +499,72 @@ export default function AdminScreen({ branches: initialBranches = [], vehicles: 
                     </View>
                   </View>
 
+                  <Text style={styles.label}>ASSIGNED HOME BRANCH / BASE YARD *</Text>
+                  <TouchableOpacity
+                    style={[
+                      styles.input,
+                      { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' },
+                      !vehicleAssignedBranchId && { borderColor: '#6366F180' },
+                    ]}
+                    onPress={() => setShowBranchPicker(!showBranchPicker)}
+                  >
+                    <Text
+                      style={{
+                        color: vehicleAssignedBranchId ? '#F8FAFC' : '#94A3B8',
+                        fontSize: 13,
+                        fontWeight: vehicleAssignedBranchId ? '600' : '400',
+                      }}
+                    >
+                      {vehicleAssignedBranchId
+                        ? `📍 ${branches.find((b) => b.id === vehicleAssignedBranchId)?.branchName || 'Base Yard Selected'}`
+                        : 'Select Base Plant Yard'}
+                    </Text>
+                    <Ionicons
+                      name={showBranchPicker ? 'chevron-up' : 'chevron-down'}
+                      size={16}
+                      color="#94A3B8"
+                    />
+                  </TouchableOpacity>
+
+                  {showBranchPicker && (
+                    <View style={styles.dropdownContainer}>
+                      <TouchableOpacity
+                        style={[styles.dropdownItem, !vehicleAssignedBranchId && styles.dropdownItemSelected]}
+                        onPress={() => {
+                          setVehicleAssignedBranchId('');
+                          setShowBranchPicker(false);
+                        }}
+                      >
+                        <Text style={[styles.dropdownItemText, !vehicleAssignedBranchId && styles.dropdownItemTextSelected]}>
+                          Select Base Plant Yard
+                        </Text>
+                      </TouchableOpacity>
+                      {branches.map((b) => {
+                        const isSelected = vehicleAssignedBranchId === b.id;
+                        return (
+                          <TouchableOpacity
+                            key={b.id}
+                            style={[styles.dropdownItem, isSelected && styles.dropdownItemSelected]}
+                            onPress={() => {
+                              setVehicleAssignedBranchId(b.id);
+                              setShowBranchPicker(false);
+                            }}
+                          >
+                            <Text
+                              style={[
+                                styles.dropdownItemText,
+                                isSelected && styles.dropdownItemTextSelected,
+                              ]}
+                            >
+                              📍 {b.branchName} ({b.branchType})
+                            </Text>
+                            {isSelected && <Ionicons name="checkmark-circle" size={16} color="#6366F1" />}
+                          </TouchableOpacity>
+                        );
+                      })}
+                    </View>
+                  )}
+
                   <View style={{ flexDirection: 'row', gap: 10 }}>
                     <View style={{ flex: 1 }}>
                       <Text style={styles.label}>DRIVER NAME</Text>
@@ -529,22 +606,33 @@ export default function AdminScreen({ branches: initialBranches = [], vehicles: 
                 </View>
               )}
 
-              {vehicles.map((v) => (
-                <View key={v.id} style={styles.listCard}>
-                  <View style={[styles.avatarBox, { backgroundColor: '#F59E0B18', borderColor: '#F59E0B40' }]}>
-                    <Ionicons name="bus-outline" size={18} color="#FBBF24" />
+              {vehicles.map((v) => {
+                const branchName =
+                  v.currentBranch?.branchName ||
+                  branches.find((b) => b.id === v.currentBranchId)?.branchName ||
+                  'Adhikarigama Sewing Plant';
+                const statusLabel = v.status === 'IN_YARD' || !v.status ? 'In Yard' : v.status;
+                const regNo = v.registrationNo || v.registrationNumber || 'VEHICLE';
+                return (
+                  <View key={v.id} style={styles.listCard}>
+                    <View style={[styles.avatarBox, { backgroundColor: '#F59E0B18', borderColor: '#F59E0B40' }]}>
+                      <Ionicons name="bus-outline" size={18} color="#FBBF24" />
+                    </View>
+                    <View style={{ flex: 1 }}>
+                      <Text style={styles.listTitle}>Lorry: {regNo}</Text>
+                      <Text style={styles.listSub}>
+                        Driver: {v.driverName} • {v.driverPhone}
+                      </Text>
+                      <Text style={[styles.listSub, { color: '#38BDF8', marginTop: 3, fontWeight: '600' }]}>
+                        Base: 📍 {branchName} ({statusLabel})
+                      </Text>
+                    </View>
+                    <View style={[styles.roleBadge, { backgroundColor: '#F59E0B18', borderColor: '#F59E0B40' }]}>
+                      <Text style={[styles.roleBadgeText, { color: '#FBBF24' }]}>{v.vehicleType}</Text>
+                    </View>
                   </View>
-                  <View style={{ flex: 1 }}>
-                    <Text style={styles.listTitle}>{v.registrationNo}</Text>
-                    <Text style={styles.listSub}>
-                      Driver: {v.driverName} • {v.driverPhone}
-                    </Text>
-                  </View>
-                  <View style={[styles.roleBadge, { backgroundColor: '#F59E0B18', borderColor: '#F59E0B40' }]}>
-                    <Text style={[styles.roleBadgeText, { color: '#FBBF24' }]}>{v.vehicleType}</Text>
-                  </View>
-                </View>
-              ))}
+                );
+              })}
             </>
           )}
         </>
@@ -704,4 +792,34 @@ const styles = StyleSheet.create({
     borderWidth: 1,
   },
   roleBadgeText: { fontSize: 9, fontWeight: '800', letterSpacing: 0.4 },
+  dropdownContainer: {
+    backgroundColor: '#060913',
+    borderRadius: 12,
+    borderWidth: 1,
+    borderColor: '#1E293B',
+    marginTop: 6,
+    marginBottom: 6,
+    overflow: 'hidden',
+  },
+  dropdownItem: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    paddingHorizontal: 14,
+    paddingVertical: 12,
+    borderBottomWidth: 1,
+    borderBottomColor: '#0F172A',
+  },
+  dropdownItemSelected: {
+    backgroundColor: '#1E1B4B',
+  },
+  dropdownItemText: {
+    color: '#94A3B8',
+    fontSize: 13,
+    fontWeight: '500',
+  },
+  dropdownItemTextSelected: {
+    color: '#F8FAFC',
+    fontWeight: '700',
+  },
 });
