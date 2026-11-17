@@ -68,3 +68,10 @@ cd frontend
 npm install
 npm run dev
 ```
+
+### Gate Officer PWA screens
+
+The five assigned Figma screens are implemented in the existing React/Vite PWA
+under `frontend/`. See [the screen guide](frontend/GATE_OFFICER.md) for direct
+preview links, live scanner wiring, configuration, sample-data boundaries, and
+verification results. The Expo app under `mobile/` is unchanged.

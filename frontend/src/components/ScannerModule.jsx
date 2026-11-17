@@ -17,30 +17,38 @@ import {
   apiRequest,
   getOfflineQueue,
   enqueueOfflineScan,
-  clearOfflineQueue,
+  SCAN_QUEUE_CHANGED,
   getCachedConsignments,
 } from '../api/client';
+import { syncOfflineScans, recordSyncedScans } from '../api/offlineSync';
 
-export default function ScannerModule({ transfers, onScanCompleted }) {
+export default function ScannerModule({ transfers, onScanCompleted, onGateResult, previewMode = false, onOpenSyncQueue }) {
   const [qrInput, setQrInput] = useState('');
   const [scannedConsignment, setScannedConsignment] = useState(null);
   const [receivedQtyInput, setReceivedQtyInput] = useState('');
   const [comments, setComments] = useState('');
   const [cameraActive, setCameraActive] = useState(false);
   const [offlineMode, setOfflineMode] = useState(!navigator.onLine);
-  const [offlineQueue, setOfflineQueue] = useState(getOfflineQueue());
+  const [offlineQueue, setOfflineQueue] = useState(() => previewMode ? [] : getOfflineQueue());
   const [syncing, setSyncing] = useState(false);
   const [feedback, setFeedback] = useState(null);
   const html5QrCodeRef = useRef(null);
+  const signatureVerified = useRef(false);
+  const gateActionInFlight = useRef(false);
 
   useEffect(() => {
     const handleOnline = () => setOfflineMode(false);
     const handleOffline = () => setOfflineMode(true);
     window.addEventListener('online', handleOnline);
     window.addEventListener('offline', handleOffline);
+    const updateQueue = () => { if (!previewMode) setOfflineQueue(getOfflineQueue()); };
+    window.addEventListener(SCAN_QUEUE_CHANGED, updateQueue);
+    window.addEventListener('storage', updateQueue);
     return () => {
       window.removeEventListener('online', handleOnline);
       window.removeEventListener('offline', handleOffline);
+      window.removeEventListener(SCAN_QUEUE_CHANGED, updateQueue);
+      window.removeEventListener('storage', updateQueue);
       stopCamera();
     };
   }, []);
@@ -85,10 +93,13 @@ export default function ScannerModule({ transfers, onScanCompleted }) {
   };
 
   const handleVerifyQr = async (payloadToVerify) => {
+    if (previewMode) { setFeedback({ type: 'info', text: 'Design preview. Sign in to verify and submit real gate scans.' }); return; }
     const raw = (payloadToVerify ?? qrInput).trim();
     if (!raw) return;
     setQrInput(raw);
     setFeedback(null);
+    setScannedConsignment(null);
+    signatureVerified.current = false;
 
     if (offlineMode) {
       // Offline verification against cached consignments (NFR4)
@@ -133,6 +144,7 @@ export default function ScannerModule({ transfers, onScanCompleted }) {
         body: JSON.stringify({ qrPayload: raw }),
       });
       setScannedConsignment(res.consignment);
+      signatureVerified.current = res.verified === true;
       setReceivedQtyInput(String(res.consignment.dispatchedQty));
       setFeedback({
         type: 'success',
@@ -144,8 +156,14 @@ export default function ScannerModule({ transfers, onScanCompleted }) {
   };
 
   const handleGateAction = async (scanType) => {
+    if (previewMode || gateActionInFlight.current) return;
     if (!qrInput && !scannedConsignment) return;
     const targetPayload = qrInput || scannedConsignment.transferCode;
+
+    if (scanType === 'DEPARTURE_OUT' && scannedConsignment?.dispatchTimestamp && signatureVerified.current && onGateResult) {
+      onGateResult('rejected', scannedConsignment, true);
+      return;
+    }
 
     // Offline Queue Path (NFR4)
     if (offlineMode) {
@@ -163,7 +181,9 @@ export default function ScannerModule({ transfers, onScanCompleted }) {
       return;
     }
 
+    gateActionInFlight.current = true;
     try {
+      const scanReceipt = { clientScanId: crypto.randomUUID(), scannedAt: new Date().toISOString(), qrPayload: targetPayload, scanType };
       let endpoint = '/api/scanner/gate-out';
       let body = { qrPayload: targetPayload };
 
@@ -180,8 +200,10 @@ export default function ScannerModule({ transfers, onScanCompleted }) {
 
       const res = await apiRequest(endpoint, {
         method: 'POST',
-        body: JSON.stringify(body),
+        body: JSON.stringify({ ...body, clientScanId: scanReceipt.clientScanId, scannedAt: scanReceipt.scannedAt }),
       });
+
+      recordSyncedScans([scanReceipt]);
 
       setScannedConsignment(res.consignment);
       const isDiscrepancy = res.consignment?.status === 'DISCREPANCY';
@@ -190,25 +212,26 @@ export default function ScannerModule({ transfers, onScanCompleted }) {
         text: res.message,
       });
       onScanCompleted();
+      if (scanType === 'DEPARTURE_OUT') onGateResult?.('released', res.consignment, signatureVerified.current);
     } catch (err) {
       setFeedback({ type: 'error', text: err.message });
+    } finally {
+      gateActionInFlight.current = false;
     }
   };
 
   const handleSyncOfflineQueue = async () => {
+    if (previewMode) return;
     const queue = getOfflineQueue();
     if (queue.length === 0) return;
     setSyncing(true);
     try {
-      const res = await apiRequest('/api/scanner/sync', {
-        method: 'POST',
-        body: JSON.stringify({ queuedScans: queue }),
-      });
-      clearOfflineQueue();
-      setOfflineQueue([]);
+      if (offlineMode) return;
+      const res = await syncOfflineScans();
+      setOfflineQueue(getOfflineQueue());
       setFeedback({
-        type: 'success',
-        text: `Offline PWA Sync Complete: ${res.syncedCount} queued gate scan(s) synchronized with central server!`,
+        type: res.status === 'synced' ? 'success' : 'warning',
+        text: `${res.syncedCount} scan(s) synchronized. ${getOfflineQueue().length} scan(s) remain safely queued.`,
       });
       onScanCompleted();
     } catch (err) {
@@ -220,6 +243,8 @@ export default function ScannerModule({ transfers, onScanCompleted }) {
 
   return (
     <div className="space-y-6">
+      {previewMode && <p className="text-sm text-amber-200">Design preview. Sign in to submit real gate scans.</p>}
+      {onOpenSyncQueue && <button type="button" onClick={onOpenSyncQueue} className="text-sm text-indigo-300 underline">View sync queue</button>}
       {/* Header & Offline PWA Toggle Bar */}
       <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4 bg-slate-900/90 border border-slate-800 rounded-2xl p-5">
         <div>

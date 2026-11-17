@@ -1,0 +1,7 @@
+<svg preserveAspectRatio="none" overflow="visible" style="display: block;" width="124" height="124" viewBox="0 0 124 124" fill="none" xmlns="http://www.w3.org/2000/svg">
+<g id="Badge">
+<rect x="5" y="5" width="114" height="114" rx="57" fill="#D2281E"/>
+<rect x="5" y="5" width="114" height="114" rx="57" stroke="#FDE4E1" stroke-width="10"/>
+<path id="Cross" d="M48 48L62 62M62 62L76 76M62 62L76 48M62 62L48 76" stroke-width="6" stroke-linecap="round" stroke-linejoin="round" stroke="white"/>
+</g>
+</svg>

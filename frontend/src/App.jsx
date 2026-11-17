@@ -20,14 +20,18 @@ import DispatchModule from './components/DispatchModule';
 import ScannerModule from './components/ScannerModule';
 import DiscrepancyModule from './components/DiscrepancyModule';
 import AdminModule from './components/AdminModule';
+import GateOfficerModule from './components/GateOfficerModule';
+import { useGateRoute } from './components/gate/gateRoutes';
 
 function getDefaultTabForRole(role) {
-  if (role === 'GATE_SECURITY' || role === 'RECEIVING_OFFICER') return 'scanner';
+  if (role === 'GATE_SECURITY') return 'gate';
+  if (role === 'RECEIVING_OFFICER') return 'scanner';
   if (role === 'DISPATCH_OFFICER') return 'dispatch';
   return 'dashboard';
 }
 
 export default function App() {
+  const gateRoute = useGateRoute();
   const [user, setUser] = useState(getStoredUser());
   const [activeTab, setActiveTab] = useState(
     user ? getDefaultTabForRole(user.role) : 'dashboard'
@@ -66,10 +70,10 @@ export default function App() {
   }, []);
 
   useEffect(() => {
-    if (user) {
+    if (user && !gateRoute.preview && !gateRoute.screen && activeTab !== 'gate') {
       loadAllData();
     }
-  }, [user, loadAllData]);
+  }, [user, loadAllData, gateRoute.preview, gateRoute.screen, activeTab]);
 
   const handleLoginSubmit = async (e) => {
     e.preventDefault();
@@ -94,6 +98,7 @@ export default function App() {
     clearAuthSession();
     setUser(null);
     setActivePass(null);
+    window.location.hash = '';
   };
 
   const handleOpenPass = async (transferId) => {
@@ -105,6 +110,11 @@ export default function App() {
       alert(err.message);
     }
   };
+
+  if ((gateRoute.screen && gateRoute.preview) || (user && (gateRoute.screen || activeTab === 'gate'))) {
+    return <GateOfficerModule key={gateRoute.preview ? 'preview' : 'live'} route={gateRoute} user={user} onLogout={handleLogout}
+      onExit={() => { window.location.hash = ''; setActiveTab(user ? 'scanner' : 'dashboard'); }} />;
+  }
 
   if (!user) {
     return (
@@ -176,6 +186,7 @@ export default function App() {
   const openDiscrepancyCount = discrepancies.filter((d) => !d.isResolved).length;
 
   const allNavItems = [
+    { id: 'gate', label: 'Gate Home', icon: ScanLine, roles: ['SYSTEM_ADMIN', 'GATE_SECURITY', 'RECEIVING_OFFICER', 'LOGISTICS_MANAGER'] },
     {
       id: 'dashboard',
       label: 'Live Overview',

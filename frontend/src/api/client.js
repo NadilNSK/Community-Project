@@ -2,6 +2,7 @@ const TOKEN_KEY = 'trendy_jwt_token';
 const USER_KEY = 'trendy_auth_user';
 const OFFLINE_QUEUE_KEY = 'trendy_pwa_offline_scan_queue';
 const CACHED_CONSIGNMENTS_KEY = 'trendy_pwa_cached_consignments';
+export const SCAN_QUEUE_CHANGED = 'trendy:scan-queue-changed';
 
 export function getStoredToken() {
   return localStorage.getItem(TOKEN_KEY);
@@ -55,7 +56,8 @@ export async function apiRequest(path, options = {}) {
 export function getOfflineQueue() {
   try {
     const raw = localStorage.getItem(OFFLINE_QUEUE_KEY);
-    return raw ? JSON.parse(raw) : [];
+    const queue = raw ? JSON.parse(raw) : [];
+    return Array.isArray(queue) ? queue : [];
   } catch {
     return [];
   }
@@ -68,13 +70,18 @@ export function enqueueOfflineScan(scanItem) {
     scannedAt: new Date().toISOString(),
     ...scanItem,
   };
-  queue.push(entry);
-  localStorage.setItem(OFFLINE_QUEUE_KEY, JSON.stringify(queue));
+  if (!queue.some((item) => item.clientScanId === entry.clientScanId)) queue.push(entry);
+  saveOfflineQueue(queue);
   return entry;
 }
 
 export function clearOfflineQueue() {
-  localStorage.setItem(OFFLINE_QUEUE_KEY, JSON.stringify([]));
+  saveOfflineQueue([]);
+}
+
+export function saveOfflineQueue(queue) {
+  localStorage.setItem(OFFLINE_QUEUE_KEY, JSON.stringify(queue));
+  window.dispatchEvent(new Event(SCAN_QUEUE_CHANGED));
 }
 
 export function cacheConsignmentsLocally(consignments) {

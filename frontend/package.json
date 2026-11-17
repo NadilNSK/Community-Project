@@ -6,7 +6,9 @@
   "scripts": {
     "dev": "vite --port 5173",
     "build": "vite build",
-    "preview": "vite preview"
+    "preview": "vite preview",
+    "test": "node --test tests/*.test.mjs",
+    "test:api": "node tests/verify-gate-api.mjs"
   },
   "dependencies": {
     "html5-qrcode": "^2.3.8",
